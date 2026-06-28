@@ -1,0 +1,4 @@
+# Copy to application-local.properties and set your local MySQL password.
+# application-local.properties is gitignored and loaded automatically at startup.
+
+spring.datasource.password=your-local-password
