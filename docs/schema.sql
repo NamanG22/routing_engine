@@ -36,3 +36,19 @@ CREATE TABLE IF NOT EXISTS payment_events (
   PRIMARY KEY (id),
   UNIQUE KEY uk_payment_events_event_id (event_id)
 );
+
+CREATE TABLE IF NOT EXISTS notification_log (
+  id                   BIGINT       NOT NULL AUTO_INCREMENT,
+  event_id             VARCHAR(100) NOT NULL,
+  transaction_id       VARCHAR(100) NOT NULL,
+  payment_status       ENUM('PENDING', 'SUCCESS', 'FAILED', 'EXPIRED') NOT NULL,
+  notification_channel ENUM('SMS', 'EMAIL', 'IN_APP', 'PUSH', 'WEB') NOT NULL,
+  notification_status  ENUM('PENDING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
+  message              VARCHAR(500) NULL,
+  created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  INDEX idx_transaction_id (transaction_id),
+  INDEX idx_event_id (event_id),
+  UNIQUE KEY uk_notification_dedupe (transaction_id, payment_status, notification_channel)
+);

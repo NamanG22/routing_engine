@@ -33,7 +33,8 @@ public class EventsProcessor {
 
     private final ProcessedEventRepository processedEventRepository;
     private final PaymentEventRepository paymentEventRepository;
-
+    private final NotificationService notificationService;
+    
     public void processEvent(EventReceived event) {
         if (!StringUtils.hasText(event.getEventId())) {
             log.error("Skipping event with missing eventId: {}", event);
@@ -135,14 +136,18 @@ public class EventsProcessor {
     }
 
     private void processPaymentSuccessEventOnlineCheckout(EventReceived event) {
-        // send sms
-        // email invoice
+        notificationService.createSMSNotification(event);
+        notificationService.createEmailNotification(event);
         // webiste notification
     }
 
     private void processPaymentSuccessEventUPIQR(EventReceived event) {
-        // send sms
-        // if amount greater than 1000 then send email
+        notificationService.createSMSNotification(event);
+
+        BigDecimal amount = new BigDecimal(event.getAmount());
+        if (amount.compareTo(BigDecimal.valueOf(1000)) > 0) {
+            notificationService.createEmailNotification(event);
+        }
         // merchant push notification
     }
 
@@ -163,7 +168,7 @@ public class EventsProcessor {
 
     private void processPaymentFailedEventOnlineCheckout(EventReceived event) {
         // in app notification
-        // email notification
+        notificationService.createEmailNotification(event);
     }
 
     private void processPaymentFailedEventUPIQR(EventReceived event) {
