@@ -138,7 +138,7 @@ public class EventsProcessor {
     private void processPaymentSuccessEventOnlineCheckout(EventReceived event) {
         notificationService.createSMSNotification(event);
         notificationService.createEmailNotification(event);
-        // webiste notification
+        notificationService.createWebsiteNotification(event);
     }
 
     private void processPaymentSuccessEventUPIQR(EventReceived event) {
@@ -167,12 +167,12 @@ public class EventsProcessor {
     }
 
     private void processPaymentFailedEventOnlineCheckout(EventReceived event) {
-        // in app notification
+        notificationService.createWebsiteNotification(event);
         notificationService.createEmailNotification(event);
     }
-
+    
     private void processPaymentFailedEventUPIQR(EventReceived event) {
-        // in app notification
+        notificationService.createInAppNotification(event);
     }
 
     private boolean savePaymentEvent(EventReceived event) {

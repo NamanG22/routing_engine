@@ -29,6 +29,18 @@ public class NotificationService {
         createNotificationLog(event, NotificationChannel.EMAIL);
     }
 
+    public void createInAppNotification(EventReceived event) {
+        createNotificationLog(event, NotificationChannel.IN_APP);
+    }
+
+    public void createWebsiteNotification(EventReceived event) {
+        createNotificationLog(event, NotificationChannel.WEB);
+    }
+
+    public void createPushNotification(EventReceived event) {
+        createNotificationLog(event, NotificationChannel.PUSH);
+    }
+
     private void createNotificationLog(EventReceived event, NotificationChannel channel) {
         if (!validateNotification(event, channel)) {
             return;
