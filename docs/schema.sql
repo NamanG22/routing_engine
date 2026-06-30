@@ -43,12 +43,18 @@ CREATE TABLE IF NOT EXISTS notification_log (
   transaction_id       VARCHAR(100) NOT NULL,
   payment_status       ENUM('PENDING', 'SUCCESS', 'FAILED', 'EXPIRED') NOT NULL,
   notification_channel ENUM('SMS', 'EMAIL', 'IN_APP', 'PUSH', 'WEB') NOT NULL,
-  notification_status  ENUM('PENDING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
+  notification_status  ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
   message              VARCHAR(500) NULL,
   created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   INDEX idx_transaction_id (transaction_id),
-  INDEX idx_event_id (event_id),
+  INDEX idx_notification_status_created (notification_status, created_at),
   UNIQUE KEY uk_notification_dedupe (transaction_id, payment_status, notification_channel)
 );
+
+-- Migration for existing databases (run manually if notification_log already exists):
+-- ALTER TABLE notification_log
+--   MODIFY notification_status ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING';
+-- CREATE INDEX idx_notification_status_created ON notification_log (notification_status, created_at);
+-- DROP INDEX idx_event_id ON notification_log;
