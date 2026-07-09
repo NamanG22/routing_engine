@@ -13,6 +13,7 @@ import lombok.Data;
 public class EventReceived {
 
 	private String eventId;
+    private String upstreamId;
     private EventType eventType;
     private PaymentMode paymentMode;
     private PaymentStatus paymentStatus;
@@ -26,6 +27,6 @@ public class EventReceived {
 
 	@Override
 	public String toString() {
-		return "EventReceived{eventType='" + eventType + "', paymentMode='" + paymentMode + "', paymentStatus='" + paymentStatus + "', merchantId='" + merchantId + "', customerId='" + customerId + "', transactionId='" + transactionId + "', amount='" + amount + "', currency='" + currency + "', metadata='" + metadata + "', timestamp='" + timestamp + "'}";
+		return "EventReceived{eventId='" + eventId + "', upstreamId='" + upstreamId + "', eventType='" + eventType + "', paymentMode='" + paymentMode + "', paymentStatus='" + paymentStatus + "', merchantId='" + merchantId + "', customerId='" + customerId + "', transactionId='" + transactionId + "', amount='" + amount + "', currency='" + currency + "', metadata='" + metadata + "', timestamp='" + timestamp + "'}";
 	}
 }

@@ -37,24 +37,41 @@ CREATE TABLE IF NOT EXISTS payment_events (
   UNIQUE KEY uk_payment_events_event_id (event_id)
 );
 
+CREATE TABLE IF NOT EXISTS notification_templates (
+  id           BIGINT       NOT NULL AUTO_INCREMENT,
+  upstream_id  VARCHAR(100) NOT NULL,
+  template_key VARCHAR(100) NOT NULL,
+  channel      ENUM('SMS', 'EMAIL', 'IN_APP', 'PUSH', 'WEB') NOT NULL,
+  attribute1   VARCHAR(50)  NULL,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_notification_templates_lookup (upstream_id, template_key, channel, attribute1)
+);
+
+CREATE TABLE IF NOT EXISTS notification_template_versions (
+  id          BIGINT    NOT NULL AUTO_INCREMENT,
+  template_id BIGINT    NOT NULL,
+  version     INT       NOT NULL,
+  body        TEXT      NOT NULL,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_template_version (template_id, version),
+  CONSTRAINT fk_template_versions_template
+    FOREIGN KEY (template_id) REFERENCES notification_templates (id)
+);
+
 CREATE TABLE IF NOT EXISTS notification_log (
   id                   BIGINT       NOT NULL AUTO_INCREMENT,
   event_id             VARCHAR(100) NOT NULL,
   transaction_id       VARCHAR(100) NOT NULL,
-  payment_status       ENUM('PENDING', 'SUCCESS', 'FAILED', 'EXPIRED') NOT NULL,
-  notification_channel ENUM('SMS', 'EMAIL', 'IN_APP', 'PUSH', 'WEB') NOT NULL,
   notification_status  ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
-  message              VARCHAR(500) NULL,
+  template_version_id  BIGINT       NOT NULL,
+  metadata             JSON         NULL,
   created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   INDEX idx_transaction_id (transaction_id),
   INDEX idx_notification_status_created (notification_status, created_at),
-  UNIQUE KEY uk_notification_dedupe (transaction_id, payment_status, notification_channel)
+  CONSTRAINT fk_notification_log_template_version
+    FOREIGN KEY (template_version_id) REFERENCES notification_template_versions (id)
 );
-
--- Migration for existing databases (run manually if notification_log already exists):
--- ALTER TABLE notification_log
---   MODIFY notification_status ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING';
--- CREATE INDEX idx_notification_status_created ON notification_log (notification_status, created_at);
--- DROP INDEX idx_event_id ON notification_log;

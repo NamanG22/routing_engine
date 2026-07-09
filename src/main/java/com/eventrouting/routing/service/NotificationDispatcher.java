@@ -1,7 +1,11 @@
 package com.eventrouting.routing.service;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.slf4j.Logger;
@@ -14,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.eventrouting.routing.config.NotificationDispatcherProperties;
 import com.eventrouting.routing.entity.NotificationLog;
+import com.eventrouting.routing.entity.NotificationTemplateVersion;
 import com.eventrouting.routing.enums.NotificationStatus;
 import com.eventrouting.routing.repository.NotificationLogRepository;
 
@@ -28,6 +33,7 @@ public class NotificationDispatcher {
     private final NotificationLogRepository notificationLogRepository;
     private final NotificationDispatcherProperties properties;
     private final TaskScheduler taskScheduler;
+    private final TemplateService templateService;
 
     @Scheduled(fixedDelayString = "${app.notification.dispatcher.poll-interval-ms:5000}")
     public void pollPendingNotifications() {
@@ -51,8 +57,13 @@ public class NotificationDispatcher {
             return List.of();
         }
 
+        Instant processingStartedAt = Instant.now();
         for (NotificationLog notification : pending) {
             notification.setNotificationStatus(NotificationStatus.PROCESSING);
+            Map<String, String> metadata = new HashMap<>(
+                    notification.getMetadata() != null ? notification.getMetadata() : Map.of());
+            metadata.put("processingStartedAt", processingStartedAt.toString());
+            notification.setMetadata(metadata);
         }
         notificationLogRepository.saveAll(pending);
 
@@ -84,17 +95,54 @@ public class NotificationDispatcher {
             return;
         }
 
+        Map<String, String> metadata = new HashMap<>(
+                notification.getMetadata() != null ? notification.getMetadata() : Map.of());
+        appendDispatchDuration(metadata);
+
+        NotificationTemplateVersion templateVersion = templateService
+                .findVersionById(notification.getTemplateVersionId())
+                .orElse(null);
+        if (templateVersion == null) {
+            metadata.put("failureReason", "TEMPLATE_VERSION_NOT_FOUND");
+            notification.setMetadata(metadata);
+            notification.setNotificationStatus(NotificationStatus.FAILED);
+            notificationLogRepository.save(notification);
+            log.warn(
+                    "Notification id={} failed — template version not found: {}",
+                    notificationId,
+                    notification.getTemplateVersionId());
+            return;
+        }
+
+        String renderedBody = templateService.render(templateVersion.getBody(), metadata);
         boolean success = ThreadLocalRandom.current().nextDouble() < properties.getSuccessRatio();
         NotificationStatus finalStatus = success ? NotificationStatus.SENT : NotificationStatus.FAILED;
         notification.setNotificationStatus(finalStatus);
+        notification.setMetadata(metadata);
         notificationLogRepository.save(notification);
 
         log.info(
-                "Notification id={} channel={} transactionId={} marked as {}",
+                "Notification id={} transactionId={} templateVersionId={} marked as {} body={}",
                 notificationId,
-                notification.getNotificationChannel(),
                 notification.getTransactionId(),
-                finalStatus);
+                notification.getTemplateVersionId(),
+                finalStatus,
+                renderedBody);
+    }
+
+    private void appendDispatchDuration(Map<String, String> metadata) {
+        String processingStartedAt = metadata.get("processingStartedAt");
+        if (processingStartedAt == null) {
+            return;
+        }
+
+        try {
+            Instant start = Instant.parse(processingStartedAt);
+            long durationMs = Duration.between(start, Instant.now()).toMillis();
+            metadata.put("dispatchDurationMs", String.valueOf(durationMs));
+        } catch (DateTimeParseException e) {
+            log.warn("Unable to parse processingStartedAt={}", processingStartedAt, e);
+        }
     }
 
     private long randomProcessingDelayMs() {
