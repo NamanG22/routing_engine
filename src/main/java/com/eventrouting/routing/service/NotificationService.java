@@ -48,6 +48,10 @@ public class NotificationService {
         createNotificationLog(event, NotificationChannel.PUSH);
     }
 
+    public void createNotification(EventReceived event, NotificationChannel channel) {
+        createNotificationLog(event, channel);
+    }
+
     private void createNotificationLog(EventReceived event, NotificationChannel channel) {
         if (!validateNotification(event, channel)) {
             return;

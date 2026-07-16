@@ -1,6 +1,6 @@
 # Routing Engine
 
-Kafka consumer service for the Event Routing Engine. Consumes payment-related events from a Kafka topic, persists them to MySQL, routes processing by event type, payment status, and payment mode, and dispatches outbound notifications from a `notification_log` work queue.
+Kafka consumer service for the Event Routing Engine. Consumes payment-related events from a Kafka topic, persists them to MySQL, matches DB-driven notification rules (with optional conditions), and dispatches outbound notifications from a `notification_log` work queue.
 
 Part of the Event Routing Engine system — pairs with the [upstream service](https://github.com/NamanG22/upstream_service) that publishes events via HTTP.
 
@@ -16,12 +16,38 @@ Create the database and tables before running the service:
 
 ```bash
 mysql -u root -p < docs/schema.sql
-mysql -u root -p routing_engine < docs/seed_notification_templates.sql
 ```
 
 Or run the SQL in `docs/schema.sql` manually. Update the user password to match your local configuration.
 
 If you already have an older schema, recreate the database or migrate manually to the tables in `docs/schema.sql`.
+
+### Local seed data
+
+Seed SQL for templates/rules is local-only and gitignored (`docs/seed_notification_templates.sql`). Create your own file for local development, for example:
+
+```bash
+# create docs/seed_notification_templates.sql with inserts for
+# notification_templates, notification_template_versions,
+# notification_rules, and notification_rule_conditions
+mysql -u root -p routing_engine < docs/seed_notification_templates.sql
+```
+
+### Notification rules
+
+Routing is driven by two tables:
+
+| Table | Purpose |
+| --- | --- |
+| `notification_rules` | Match `(event, mode, status)` → `channel` (plus `upstream_id`) |
+| `notification_rule_conditions` | Optional predicates on a rule (`field`, `operator`, `value`) |
+
+For each matching rule:
+
+1. If the rule has **no** conditions → create a notification for that channel.
+2. If it has conditions → **all** must pass (AND). Example: `field=amount`, `operator=GTE`, `value=1000` means amount ≥ 1000.
+
+Supported operators today: `GTE`, `GT`, `LTE`, `LT`, `EQ`. Supported fields today: `amount`. Add new fields via an `EventFieldExtractor` bean; add operators in `ConditionOperator`.
 
 ### Notification templates
 
@@ -35,15 +61,15 @@ Templates are split across two tables:
 When creating a notification, the service resolves the template using:
 
 - `upstreamId` from the event
-- `metadata.templateKey` from the event (e.g. `PAYMENT_STATUS_UPDATED`)
-- `channel` from routing rules in this service
+- `metadata.templateKey` from the event
+- `channel` from the matched notification rule
 - `attribute1` from `paymentStatus` when present (e.g. `SUCCESS`, `FAILED`); omitted templates use `attribute1 IS NULL`
 
 The latest version id is stored on `notification_log.template_version_id` so dispatch always renders the body that was pinned at create time.
 
 To update a template body, insert a new row in `notification_template_versions` with a higher `version`. Existing notification logs keep pointing at the version they were created with.
 
-Placeholders use `{{key}}` syntax (e.g. `{{amount}}`, `{{paymentStatus}}`).
+Placeholders use `{{key}}` syntax (e.g. `{{amount}}`, `{{transactionId}}`).
 
 Duplicate notifications are skipped per `(transaction_id, template_id)` — a new template version does not bypass dedupe for the same logical template.
 
@@ -96,22 +122,23 @@ Supported event types:
 
 | `eventType` | Behavior |
 | --- | --- |
-| `PAYMENT_STATUS_UPDATED` | Validates payload, saves to `payment_events`, routes by status (`SUCCESS`, `FAILED`, `PENDING`) and mode (`UPI_QR`, `ONLINE_CHECKOUT`), and creates `notification_log` entries where applicable |
+| `PAYMENT_STATUS_UPDATED` | Validates payload, saves to `payment_events`, looks up `notification_rules` by event/mode/status, evaluates optional conditions, and creates `notification_log` entries for matching channels |
 | `NOTIFICATION_DELIVERY_STATUS` | Placeholder — not yet implemented |
 
 Duplicate events are skipped using idempotency tracking in `processed_events`.
 
 ### Notification routing
 
-When a payment event is processed, the service writes rows to `notification_log` with status `PENDING`. Duplicate notifications for the same `(transaction_id, template)` are skipped.
+Flow for each event:
 
-| Payment status | Mode | Channels |
-| --- | --- | --- |
-| `SUCCESS` | `ONLINE_CHECKOUT` | SMS, EMAIL, WEB |
-| `SUCCESS` | `UPI_QR` | SMS; EMAIL if amount > 1000 |
-| `FAILED` | `ONLINE_CHECKOUT` | WEB, EMAIL |
-| `FAILED` | `UPI_QR` | IN_APP |
-| `PENDING` | — | *(scheduled notifications — not yet implemented)* |
+```
+save payment_events
+  → find notification_rules (event + mode + status)
+  → for each rule, evaluate notification_rule_conditions (if any)
+  → create notification_log (PENDING) for the rule channel
+```
+
+Duplicate notifications for the same `(transaction_id, template)` are skipped.
 
 ### Notification dispatcher
 
@@ -171,10 +198,11 @@ Tests use embedded Kafka and an in-memory H2 database — no external Kafka or M
 
 ```
 src/main/java/com/eventrouting/routing/
+├── condition/    # Rule condition evaluation (operators + field extractors)
 ├── config/       # Kafka consumer and notification dispatcher configuration
 ├── constants/    # Shared constants
 ├── dto/          # Incoming event payload
-├── entity/       # JPA entities (payment_events, processed_events, notification_log, notification_templates, notification_template_versions)
+├── entity/       # JPA entities (payment_events, processed_events, notification_*)
 ├── enums/        # Event, payment, notification, and currency types
 ├── kafka/        # Kafka consumer
 ├── repository/   # Spring Data JPA repositories

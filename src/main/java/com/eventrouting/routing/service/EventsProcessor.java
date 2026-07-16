@@ -7,15 +7,19 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.eventrouting.routing.condition.RuleConditionEvaluator;
 import com.eventrouting.routing.dto.EventReceived;
+import com.eventrouting.routing.entity.NotificationRule;
 import com.eventrouting.routing.entity.PaymentEvent;
 import com.eventrouting.routing.entity.ProcessedEvent;
+import com.eventrouting.routing.repository.NotificationRuleRepository;
 import com.eventrouting.routing.repository.PaymentEventRepository;
 import com.eventrouting.routing.repository.ProcessedEventRepository;
 
@@ -33,6 +37,8 @@ public class EventsProcessor {
 
     private final ProcessedEventRepository processedEventRepository;
     private final PaymentEventRepository paymentEventRepository;
+    private final NotificationRuleRepository notificationRuleRepository;
+    private final RuleConditionEvaluator ruleConditionEvaluator;
     private final NotificationService notificationService;
     
     public void processEvent(EventReceived event) {
@@ -46,17 +52,48 @@ public class EventsProcessor {
             return;
         }
 
-        boolean processedSuccessfully = switch (event.getEventType()) {
-            case PAYMENT_STATUS_UPDATED -> processPaymentStatusUpdatedEvent(event);
-            case NOTIFICATION_DELIVERY_STATUS -> {
-                processNotificationDeliveryStatusEvent(event);
-                yield true;
-            }
-        };
+        // boolean processedSuccessfully = switch (event.getEventType()) {
+        //     case PAYMENT_STATUS_UPDATED -> processPaymentStatusUpdatedEvent(event);
+        //     case NOTIFICATION_DELIVERY_STATUS -> {
+        //         processNotificationDeliveryStatusEvent(event);
+        //         yield true;
+        //     }
+        // };
+
+        boolean processedSuccessfully = processEventAndSendNotification(event);
 
         if (processedSuccessfully) {
             markEventAsProcessed(event);
         }
+    }
+
+    private boolean processEventAndSendNotification(EventReceived event) {
+        if (!savePaymentEvent(event)) {
+            return false;
+        }
+
+        List<NotificationRule> rules = notificationRuleRepository.findByEventAndModeAndStatus(
+                event.getEventType(), event.getPaymentMode(), event.getPaymentStatus());
+        if (rules.isEmpty()) {
+            log.info(
+                    "No notification rules for eventType={}, mode={}, status={}",
+                    event.getEventType(),
+                    event.getPaymentMode(),
+                    event.getPaymentStatus());
+            return true;
+        }
+
+        for (NotificationRule rule : rules) {
+            if (!ruleConditionEvaluator.matches(event, rule.getId())) {
+                log.info(
+                        "Skipping notification for ruleId={}, channel={} — conditions not met",
+                        rule.getId(),
+                        rule.getChannel());
+                continue;
+            }
+            notificationService.createNotification(event, rule.getChannel());
+        }
+        return true;
     }
 
     private void markEventAsProcessed(EventReceived event) {
@@ -66,114 +103,114 @@ public class EventsProcessor {
         log.info("Marked event as processed: {}", event.getEventId());
     }
 
-    private void processNotificationDeliveryStatusEvent(EventReceived event) {
-        // later we will implement this
-    }
+    // private void processNotificationDeliveryStatusEvent(EventReceived event) {
+    //     // later we will implement this
+    // }
 
-    private boolean processPaymentStatusUpdatedEvent(EventReceived event) {
-        if (!savePaymentEvent(event)) {
-            return false;
-        }
+    // private boolean processPaymentStatusUpdatedEvent(EventReceived event) {
+    //     if (!savePaymentEvent(event)) {
+    //         return false;
+    //     }
 
-        switch (event.getPaymentStatus()) {
-            case SUCCESS:
-                processPaymentSuccessEvent(event);
-                break;
-            case FAILED:
-                processPaymentFailedEvent(event);
-                break;
-            case PENDING:
-                processPaymentPendingEvent(event);
-                break;
-            default:
-                log.error("Unknown payment status: {}", event.getPaymentStatus());
-                return false;
-        }
-        return true;
-    }
+    //     switch (event.getPaymentStatus()) {
+    //         case SUCCESS:
+    //             processPaymentSuccessEvent(event);
+    //             break;
+    //         case FAILED:
+    //             processPaymentFailedEvent(event);
+    //             break;
+    //         case PENDING:
+    //             processPaymentPendingEvent(event);
+    //             break;
+    //         default:
+    //             log.error("Unknown payment status: {}", event.getPaymentStatus());
+    //             return false;
+    //     }
+    //     return true;
+    // }
 
-    private void processPaymentPendingEvent(EventReceived event) {
-        log.info("Payment pending event received: {}", event);
+    // private void processPaymentPendingEvent(EventReceived event) {
+    //     log.info("Payment pending event received: {}", event);
 
-        // make a entry in job scheduler to check the status after 5 minitess if still pending then add a new entry with status EXPIRED
+    //     // make a entry in job scheduler to check the status after 5 minitess if still pending then add a new entry with status EXPIRED
 
-        switch (event.getPaymentMode()) {
-            case UPI_QR:
-                processPaymentPendingEventUPIQR(event);
-                break;
-            case ONLINE_CHECKOUT:
-                processPaymentPendingEventOnlineCheckout(event);
-                break;
-            default:
-                log.error("Unknown payment mode: {}", event.getPaymentMode());
-                break;
-        }
+    //     switch (event.getPaymentMode()) {
+    //         case UPI_QR:
+    //             processPaymentPendingEventUPIQR(event);
+    //             break;
+    //         case ONLINE_CHECKOUT:
+    //             processPaymentPendingEventOnlineCheckout(event);
+    //             break;
+    //         default:
+    //             log.error("Unknown payment mode: {}", event.getPaymentMode());
+    //             break;
+    //     }
 
-        // store every notification send to notification_log table 
-    }
+    //     // store every notification send to notification_log table 
+    // }
 
-    private void processPaymentPendingEventUPIQR(EventReceived event) {
-        // make a entry in job scheduler to check the status after 30 seconds if still pending then trigger the in app notification
-    }
+    // private void processPaymentPendingEventUPIQR(EventReceived event) {
+    //     // make a entry in job scheduler to check the status after 30 seconds if still pending then trigger the in app notification
+    // }
     
-    private void processPaymentPendingEventOnlineCheckout(EventReceived event) {
-        // make a entry in job scheduler to check the status after 1 minute if still pending then trigger the in app notification
-    }
+    // private void processPaymentPendingEventOnlineCheckout(EventReceived event) {
+    //     // make a entry in job scheduler to check the status after 1 minute if still pending then trigger the in app notification
+    // }
 
-    private void processPaymentSuccessEvent(EventReceived event) {
-        log.info("Payment success event received: {}", event);
-        switch (event.getPaymentMode()) {
-            case UPI_QR:
-                processPaymentSuccessEventUPIQR(event);
-                break;
-            case ONLINE_CHECKOUT:
-                processPaymentSuccessEventOnlineCheckout(event);
-                break;
-            default:
-                log.error("Unknown payment mode: {}", event.getPaymentMode());
-                break;
-        }
-    }
+    // private void processPaymentSuccessEvent(EventReceived event) {
+    //     log.info("Payment success event received: {}", event);
+    //     switch (event.getPaymentMode()) {
+    //         case UPI_QR:
+    //             processPaymentSuccessEventUPIQR(event);
+    //             break;
+    //         case ONLINE_CHECKOUT:
+    //             processPaymentSuccessEventOnlineCheckout(event);
+    //             break;
+    //         default:
+    //             log.error("Unknown payment mode: {}", event.getPaymentMode());
+    //             break;
+    //     }
+    // }
 
-    private void processPaymentSuccessEventOnlineCheckout(EventReceived event) {
-        notificationService.createSMSNotification(event);
-        notificationService.createEmailNotification(event);
-        notificationService.createWebsiteNotification(event);
-    }
+    // private void processPaymentSuccessEventOnlineCheckout(EventReceived event) {
+    //     notificationService.createSMSNotification(event);
+    //     notificationService.createEmailNotification(event);
+    //     notificationService.createWebsiteNotification(event);
+    // }
 
-    private void processPaymentSuccessEventUPIQR(EventReceived event) {
-        notificationService.createSMSNotification(event);
+    // private void processPaymentSuccessEventUPIQR(EventReceived event) {
+    //     notificationService.createSMSNotification(event);
 
-        BigDecimal amount = new BigDecimal(event.getAmount());
-        if (amount.compareTo(BigDecimal.valueOf(1000)) > 0) {
-            notificationService.createEmailNotification(event);
-        }
-        // merchant push notification
-    }
+    //     BigDecimal amount = new BigDecimal(event.getAmount());
+    //     if (amount.compareTo(BigDecimal.valueOf(1000)) >= 0) {
+    //         notificationService.createEmailNotification(event);
+    //     }
+    //     // merchant push notification
+    // }
 
-    private void processPaymentFailedEvent(EventReceived event) {
-        log.info("Payment failed event received: {}", event);
+    // private void processPaymentFailedEvent(EventReceived event) {
+    //     log.info("Payment failed event received: {}", event);
 
-        switch (event.getPaymentMode()) {
-            case UPI_QR:
-                processPaymentFailedEventUPIQR(event);
-                break;
-            case ONLINE_CHECKOUT:
-                processPaymentFailedEventOnlineCheckout(event);
-                break;
-            default:
-                log.error("Unknown payment mode: {}", event.getPaymentMode());
-        }
-    }
+    //     switch (event.getPaymentMode()) {
+    //         case UPI_QR:
+    //             processPaymentFailedEventUPIQR(event);
+    //             break;
+    //         case ONLINE_CHECKOUT:
+    //             processPaymentFailedEventOnlineCheckout(event);
+    //             break;
+    //         default:
+    //             log.error("Unknown payment mode: {}", event.getPaymentMode());
+    //     }
+    // }
 
-    private void processPaymentFailedEventOnlineCheckout(EventReceived event) {
-        notificationService.createWebsiteNotification(event);
-        notificationService.createEmailNotification(event);
-    }
+    // private void processPaymentFailedEventOnlineCheckout(EventReceived event) {
+    //     notificationService.createWebsiteNotification(event);
+    //     notificationService.createEmailNotification(event);
+    // }
     
-    private void processPaymentFailedEventUPIQR(EventReceived event) {
-        notificationService.createInAppNotification(event);
-    }
+    // private void processPaymentFailedEventUPIQR(EventReceived event) {
+    //     notificationService.createInAppNotification(event);
+    // }
 
     private boolean savePaymentEvent(EventReceived event) {
         if (!validatePaymentEvent(event)) {

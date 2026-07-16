@@ -37,6 +37,27 @@ CREATE TABLE IF NOT EXISTS payment_events (
   UNIQUE KEY uk_payment_events_event_id (event_id)
 );
 
+CREATE TABLE IF NOT EXISTS notification_rules (
+  id           BIGINT       NOT NULL AUTO_INCREMENT,
+  upstream_id  VARCHAR(100) NOT NULL,
+  event        VARCHAR(50)  NOT NULL,
+  mode         VARCHAR(50)  NOT NULL,
+  status       VARCHAR(50)  NOT NULL,
+  channel      ENUM('SMS', 'EMAIL', 'IN_APP', 'PUSH', 'WEB') NOT NULL,
+  PRIMARY KEY (id)
+);
+
+CREATE TABLE IF NOT EXISTS notification_rule_conditions (
+  id                   BIGINT       NOT NULL AUTO_INCREMENT,
+  notification_rule_id BIGINT       NOT NULL,
+  field                VARCHAR(100) NOT NULL,
+  operator             VARCHAR(50)  NOT NULL,
+  value                VARCHAR(255) NOT NULL,
+  PRIMARY KEY (id),
+  CONSTRAINT fk_notification_rule_conditions_rule
+    FOREIGN KEY (notification_rule_id) REFERENCES notification_rules (id)
+);
+
 CREATE TABLE IF NOT EXISTS notification_templates (
   id           BIGINT       NOT NULL AUTO_INCREMENT,
   upstream_id  VARCHAR(100) NOT NULL,

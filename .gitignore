@@ -39,6 +39,9 @@ build/
 application-local.properties
 application-*.local.properties
 
+### Local seed data ###
+docs/seed_notification_templates.sql
+
 ### OS ###
 .DS_Store
 Thumbs.db
