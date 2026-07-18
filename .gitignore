@@ -41,6 +41,7 @@ application-*.local.properties
 
 ### Local seed data ###
 docs/seed_notification_templates.sql
+docs/migration_notification_retry.sql
 
 ### OS ###
 .DS_Store

@@ -1,5 +1,6 @@
 package com.eventrouting.routing.repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.data.domain.Pageable;
@@ -24,4 +25,17 @@ public interface NotificationLogRepository extends JpaRepository<NotificationLog
 
     List<NotificationLog> findByNotificationStatusOrderByCreatedAtAsc(
             NotificationStatus notificationStatus, Pageable pageable);
+
+    @Query("""
+            SELECT nl
+            FROM NotificationLog nl
+            WHERE nl.notificationStatus = :status
+              AND nl.nextRetryAt IS NOT NULL
+              AND nl.nextRetryAt <= :now
+            ORDER BY nl.nextRetryAt ASC
+            """)
+    List<NotificationLog> findDueForRetry(
+            @Param("status") NotificationStatus status,
+            @Param("now") LocalDateTime now,
+            Pageable pageable);
 }

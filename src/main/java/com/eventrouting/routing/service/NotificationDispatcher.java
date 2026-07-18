@@ -2,6 +2,7 @@ package com.eventrouting.routing.service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.List;
@@ -17,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.eventrouting.routing.config.NotificationDispatcherProperties;
+import com.eventrouting.routing.config.NotificationRetryProperties;
+import com.eventrouting.routing.constants.TimeZones;
 import com.eventrouting.routing.entity.NotificationLog;
 import com.eventrouting.routing.entity.NotificationTemplateVersion;
 import com.eventrouting.routing.enums.NotificationStatus;
@@ -32,6 +35,7 @@ public class NotificationDispatcher {
 
     private final NotificationLogRepository notificationLogRepository;
     private final NotificationDispatcherProperties properties;
+    private final NotificationRetryProperties retryProperties;
     private final TaskScheduler taskScheduler;
     private final TemplateService templateService;
 
@@ -95,6 +99,8 @@ public class NotificationDispatcher {
             return;
         }
 
+        notification.setLastAttemptAt(LocalDateTime.now(TimeZones.APP));
+
         Map<String, String> metadata = new HashMap<>(
                 notification.getMetadata() != null ? notification.getMetadata() : Map.of());
         appendDispatchDuration(metadata);
@@ -105,10 +111,10 @@ public class NotificationDispatcher {
         if (templateVersion == null) {
             metadata.put("failureReason", "TEMPLATE_VERSION_NOT_FOUND");
             notification.setMetadata(metadata);
-            notification.setNotificationStatus(NotificationStatus.FAILED);
+            markPermanentlyFailed(notification);
             notificationLogRepository.save(notification);
             log.warn(
-                    "Notification id={} failed — template version not found: {}",
+                    "Notification id={} failed permanently — template version not found: {}",
                     notificationId,
                     notification.getTemplateVersionId());
             return;
@@ -116,18 +122,53 @@ public class NotificationDispatcher {
 
         String renderedBody = templateService.render(templateVersion.getBody(), metadata);
         boolean success = ThreadLocalRandom.current().nextDouble() < properties.getSuccessRatio();
-        NotificationStatus finalStatus = success ? NotificationStatus.SENT : NotificationStatus.FAILED;
-        notification.setNotificationStatus(finalStatus);
-        notification.setMetadata(metadata);
-        notificationLogRepository.save(notification);
+        if (success) {
+            notification.setNotificationStatus(NotificationStatus.SENT);
+            notification.setNextRetryAt(null);
+            notification.setMetadata(metadata);
+            notificationLogRepository.save(notification);
+            log.info(
+                    "Notification id={} transactionId={} templateVersionId={} marked as SENT body={}",
+                    notificationId,
+                    notification.getTransactionId(),
+                    notification.getTemplateVersionId(),
+                    renderedBody);
+            return;
+        }
 
+        applyFailure(notification, metadata);
+        notificationLogRepository.save(notification);
         log.info(
-                "Notification id={} transactionId={} templateVersionId={} marked as {} body={}",
+                "Notification id={} transactionId={} templateVersionId={} marked as {} retryCount={} nextRetryAt={} body={}",
                 notificationId,
                 notification.getTransactionId(),
                 notification.getTemplateVersionId(),
-                finalStatus,
+                notification.getNotificationStatus(),
+                notification.getRetryCount(),
+                notification.getNextRetryAt(),
                 renderedBody);
+    }
+
+    private void applyFailure(NotificationLog notification, Map<String, String> metadata) {
+        List<Duration> delays = retryProperties.getDelays();
+        int retryCount = notification.getRetryCount();
+
+        if (retryProperties.isEnabled() && delays != null && retryCount < delays.size()) {
+            Duration delay = delays.get(retryCount);
+            notification.setNextRetryAt(LocalDateTime.now(TimeZones.APP).plus(delay));
+            notification.setRetryCount(retryCount + 1);
+            notification.setNotificationStatus(NotificationStatus.FAILED);
+            notification.setMetadata(metadata);
+            return;
+        }
+
+        notification.setMetadata(metadata);
+        markPermanentlyFailed(notification);
+    }
+
+    private void markPermanentlyFailed(NotificationLog notification) {
+        notification.setNotificationStatus(NotificationStatus.FAILED_PERMANENTLY);
+        notification.setNextRetryAt(null);
     }
 
     private void appendDispatchDuration(Map<String, String> metadata) {

@@ -1,6 +1,6 @@
 # Routing Engine
 
-Kafka consumer service for the Event Routing Engine. Consumes payment-related events from a Kafka topic, persists them to MySQL, matches DB-driven notification rules (with optional conditions), and dispatches outbound notifications from a `notification_log` work queue.
+Kafka consumer service for the Event Routing Engine. Consumes payment-related events from a Kafka topic, persists them to MySQL, matches DB-driven notification rules (with optional conditions), dispatches outbound notifications from a `notification_log` work queue, and retries transient failures with configurable backoff.
 
 Part of the Event Routing Engine system — pairs with the [upstream service](https://github.com/NamanG22/upstream_service) that publishes events via HTTP.
 
@@ -21,6 +21,8 @@ mysql -u root -p < docs/schema.sql
 Or run the SQL in `docs/schema.sql` manually. Update the user password to match your local configuration.
 
 If you already have an older schema, recreate the database or migrate manually to the tables in `docs/schema.sql`.
+
+Local migration scripts (e.g. `docs/migration_notification_retry.sql`) are gitignored — keep them for one-off local upgrades when you prefer not to recreate the DB.
 
 ### Local seed data
 
@@ -92,6 +94,10 @@ Settings are in `src/main/resources/application.properties`:
 | `app.notification.dispatcher.processing-delay-min-ms` | `10000` | Min simulated send duration (ms) |
 | `app.notification.dispatcher.processing-delay-max-ms` | `20000` | Max simulated send duration (ms) |
 | `app.notification.dispatcher.success-ratio` | `0.9` | Fraction of notifications marked `SENT` (rest are `FAILED`) |
+| `app.notification.retry.enabled` | `true` | Enable the background retry requeue scheduler |
+| `app.notification.retry.poll-interval-ms` | `10000` | Delay between retry poll cycles (ms) |
+| `app.notification.retry.batch-size` | `10` | Max due failed notifications requeued per poll |
+| `app.notification.retry.delays` | `1m,5m,15m` | Backoff delays after each failure (list length = max retries) |
 
 Override locally by copying the example file (loaded automatically — no profile flag needed):
 
@@ -145,7 +151,9 @@ Duplicate notifications for the same `(transaction_id, template)` are skipped.
 A single-instance background dispatcher polls `notification_log` and simulates sending notifications:
 
 ```
-PENDING  →  PROCESSING  →  SENT (90%) or FAILED (10%)
+PENDING  →  PROCESSING  →  SENT
+                       ↘  FAILED (retryable)  →  PENDING (via retry scheduler)  →  …
+                       ↘  FAILED_PERMANENTLY (retries exhausted or non-retryable)
 ```
 
 1. Every `poll-interval-ms`, fetch up to `batch-size` oldest `PENDING` rows.
@@ -153,16 +161,36 @@ PENDING  →  PROCESSING  →  SENT (90%) or FAILED (10%)
 3. Schedule completion after a random delay between `processing-delay-min-ms` and `processing-delay-max-ms`.
 4. Render the template version body, simulate send, and mark each row `SENT` or `FAILED` based on `success-ratio`.
 5. Append `dispatchDurationMs` to metadata on completion.
+6. On transient failure: set `last_attempt_at`, schedule `next_retry_at` from `app.notification.retry.delays[retry_count]`, then increment `retry_count`.
+7. When retries are exhausted (or the failure is non-retryable, e.g. missing template version): mark `FAILED_PERMANENTLY` and clear `next_retry_at`.
 
-Check dispatch progress:
+### Notification retry scheduler
+
+A separate thin scheduler only decides **when** to retry; it does not send. The dispatcher remains the only send path (same `success-ratio`).
+
+1. Every `app.notification.retry.poll-interval-ms`, find up to `batch-size` rows with `notification_status=FAILED` and `next_retry_at <= now` (Asia/Kolkata wall clock).
+2. Requeue them as `PENDING` and clear `next_retry_at`.
+3. The dispatcher picks them up on the next poll like any other pending notification.
+
+Default backoff: **1m → 5m → 15m** (3 retries). After that: `FAILED_PERMANENTLY`.
+
+Timestamp columns:
+
+| Column | Type / ownership | Notes |
+| --- | --- | --- |
+| `created_at` / `updated_at` | DB-managed `TIMESTAMP` | Same pattern as `payment_events.created_at` |
+| `last_attempt_at` / `next_retry_at` | App-written `DATETIME` | Asia/Kolkata wall clock (same idea as `payment_events.event_timestamp`) |
+
+Check dispatch / retry progress:
 
 ```sql
-SELECT id, notification_status, template_version_id, created_at, updated_at
+SELECT id, notification_status, retry_count, last_attempt_at, next_retry_at,
+       template_version_id, created_at, updated_at
 FROM notification_log
 ORDER BY id DESC;
 ```
 
-Set `app.notification.dispatcher.enabled=false` to disable polling (e.g. during tests).
+Set `app.notification.dispatcher.enabled=false` and/or `app.notification.retry.enabled=false` to disable polling (e.g. during tests).
 
 ### Sample Kafka message
 
@@ -199,14 +227,14 @@ Tests use embedded Kafka and an in-memory H2 database — no external Kafka or M
 ```
 src/main/java/com/eventrouting/routing/
 ├── condition/    # Rule condition evaluation (operators + field extractors)
-├── config/       # Kafka consumer and notification dispatcher configuration
-├── constants/    # Shared constants
+├── config/       # Kafka consumer, dispatcher, and retry configuration
+├── constants/    # Shared constants (including app timezone)
 ├── dto/          # Incoming event payload
 ├── entity/       # JPA entities (payment_events, processed_events, notification_*)
 ├── enums/        # Event, payment, notification, and currency types
 ├── kafka/        # Kafka consumer
 ├── repository/   # Spring Data JPA repositories
-└── service/      # Event processing, template rendering, notification creation, and dispatch logic
+└── service/      # Event processing, templates, dispatch, and retry requeue
 ```
 
 ## Build

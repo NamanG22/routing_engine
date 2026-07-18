@@ -1,12 +1,13 @@
 package com.eventrouting.routing.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.verify;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Map;
+
+import com.eventrouting.routing.constants.TimeZones;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,13 +31,17 @@ import com.eventrouting.routing.repository.NotificationTemplateVersionRepository
 @EmbeddedKafka(partitions = 1, topics = { "events" })
 @TestPropertySource(properties = {
         "app.notification.dispatcher.enabled=true",
+        "app.notification.dispatcher.success-ratio=0.0",
         "app.notification.retry.enabled=true",
         "app.notification.retry.delays=1m,5m,15m"
 })
-class NotificationDispatcherTest {
+class NotificationDispatcherRetryTest {
 
     @Autowired
     private NotificationDispatcher notificationDispatcher;
+
+    @Autowired
+    private NotificationRetryScheduler notificationRetryScheduler;
 
     @Autowired
     private NotificationLogRepository notificationLogRepository;
@@ -58,68 +63,27 @@ class NotificationDispatcherTest {
         notificationTemplateVersionRepository.deleteAll();
         notificationTemplateRepository.deleteAll();
         testTemplateVersionId = seedTemplateVersion();
-
-        doAnswer(invocation -> {
-            Runnable task = invocation.getArgument(0);
-            task.run();
-            return null;
-        }).when(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
     }
 
     @Test
-    void claimPendingNotificationsMarksRowsAsProcessing() {
-        NotificationLog pending = savePendingNotification("txn-claim-1");
-
-        var claimedIds = notificationDispatcher.claimPendingNotifications();
-
-        assertThat(claimedIds).containsExactly(pending.getId());
-        NotificationLog updated = notificationLogRepository.findById(pending.getId()).orElseThrow();
-        assertThat(updated.getNotificationStatus()).isEqualTo(NotificationStatus.PROCESSING);
-        assertThat(updated.getMetadata()).containsKey("processingStartedAt");
-    }
-
-    @Test
-    void completeNotificationMarksProcessingRowAsSentOrFailed() {
-        NotificationLog processing = saveProcessingNotification("txn-complete-1");
+    void completeNotificationSchedulesFirstRetryOnFailure() {
+        LocalDateTime before = LocalDateTime.now(TimeZones.APP);
+        NotificationLog processing = saveProcessingNotification("txn-retry-1");
 
         notificationDispatcher.completeNotification(processing.getId());
 
         NotificationLog updated = notificationLogRepository.findById(processing.getId()).orElseThrow();
-        assertThat(updated.getNotificationStatus())
-                .isIn(NotificationStatus.SENT, NotificationStatus.FAILED);
-        assertThat(updated.getMetadata()).containsKey("dispatchDurationMs");
+        assertThat(updated.getNotificationStatus()).isEqualTo(NotificationStatus.FAILED);
+        assertThat(updated.getRetryCount()).isEqualTo(1);
         assertThat(updated.getLastAttemptAt()).isNotNull();
+        assertThat(updated.getNextRetryAt()).isAfter(before.plus(Duration.ofSeconds(50)));
+        assertThat(updated.getNextRetryAt()).isBefore(before.plus(Duration.ofSeconds(70)));
     }
 
     @Test
-    void pollPendingNotificationsClaimsAndSchedulesCompletion() {
-        NotificationLog pending = savePendingNotification("txn-poll-1");
-
-        notificationDispatcher.pollPendingNotifications();
-
-        assertThat(notificationLogRepository.findById(pending.getId()).orElseThrow().getNotificationStatus())
-                .isIn(NotificationStatus.SENT, NotificationStatus.FAILED);
-        verify(taskScheduler).schedule(any(Runnable.class), any(Instant.class));
-    }
-
-    @Test
-    void successRatioSkewsTowardSent() {
-        for (int i = 0; i < 100; i++) {
-            NotificationLog processing = saveProcessingNotification("txn-ratio-" + i);
-            notificationDispatcher.completeNotification(processing.getId());
-        }
-
-        long sentCount = notificationLogRepository.findAll().stream()
-                .filter(notification -> notification.getNotificationStatus() == NotificationStatus.SENT)
-                .count();
-
-        assertThat(sentCount).isGreaterThan(50);
-    }
-
-    @Test
-    void completeNotificationFailsPermanentlyWhenTemplateVersionMissing() {
-        NotificationLog processing = saveProcessingNotification("txn-missing-template");
-        processing.setTemplateVersionId(99999L);
+    void completeNotificationMarksPermanentlyFailedAfterRetriesExhausted() {
+        NotificationLog processing = saveProcessingNotification("txn-retry-exhausted");
+        processing.setRetryCount(3);
         notificationLogRepository.save(processing);
 
         notificationDispatcher.completeNotification(processing.getId());
@@ -127,12 +91,39 @@ class NotificationDispatcherTest {
         NotificationLog updated = notificationLogRepository.findById(processing.getId()).orElseThrow();
         assertThat(updated.getNotificationStatus()).isEqualTo(NotificationStatus.FAILED_PERMANENTLY);
         assertThat(updated.getNextRetryAt()).isNull();
-        assertThat(updated.getMetadata()).containsEntry("failureReason", "TEMPLATE_VERSION_NOT_FOUND");
+        assertThat(updated.getRetryCount()).isEqualTo(3);
+    }
+
+    @Test
+    void retrySchedulerRequeuesDueFailedNotificationsAsPending() {
+        NotificationLog due = saveProcessingNotification("txn-requeue-due");
+        due.setNotificationStatus(NotificationStatus.FAILED);
+        due.setRetryCount(1);
+        due.setNextRetryAt(LocalDateTime.now(TimeZones.APP).minusSeconds(10));
+        notificationLogRepository.save(due);
+
+        NotificationLog notDue = saveProcessingNotification("txn-requeue-future");
+        notDue.setNotificationStatus(NotificationStatus.FAILED);
+        notDue.setRetryCount(1);
+        notDue.setNextRetryAt(LocalDateTime.now(TimeZones.APP).plus(Duration.ofMinutes(5)));
+        notificationLogRepository.save(notDue);
+
+        var requeuedIds = notificationRetryScheduler.requeueDueRetries();
+
+        assertThat(requeuedIds).containsExactly(due.getId());
+        NotificationLog requeued = notificationLogRepository.findById(due.getId()).orElseThrow();
+        assertThat(requeued.getNotificationStatus()).isEqualTo(NotificationStatus.PENDING);
+        assertThat(requeued.getNextRetryAt()).isNull();
+        assertThat(requeued.getRetryCount()).isEqualTo(1);
+
+        NotificationLog stillWaiting = notificationLogRepository.findById(notDue.getId()).orElseThrow();
+        assertThat(stillWaiting.getNotificationStatus()).isEqualTo(NotificationStatus.FAILED);
+        assertThat(stillWaiting.getNextRetryAt()).isNotNull();
     }
 
     private Long seedTemplateVersion() {
         NotificationTemplate template = new NotificationTemplate();
-        template.setUpstreamId("upstream-test");
+        template.setUpstreamId("upstream-retry-test");
         template.setTemplateKey("PAYMENT_STATUS_UPDATED");
         template.setChannel(NotificationChannel.SMS);
         template.setAttribute1("SUCCESS");
@@ -141,31 +132,21 @@ class NotificationDispatcherTest {
         NotificationTemplateVersion version = new NotificationTemplateVersion();
         version.setTemplate(template);
         version.setVersion(1);
-        version.setBody("Payment of {{amount}} {{currency}} is {{paymentStatus}} for {{transactionId}}");
+        version.setBody("Payment of {{amount}} {{currency}} for {{transactionId}}");
         return notificationTemplateVersionRepository.save(version).getId();
     }
 
-    private NotificationLog savePendingNotification(String transactionId) {
-        return notificationLogRepository.save(buildNotification(transactionId, NotificationStatus.PENDING));
-    }
-
     private NotificationLog saveProcessingNotification(String transactionId) {
-        NotificationLog notification = buildNotification(transactionId, NotificationStatus.PROCESSING);
-        notification.setMetadata(Map.of("processingStartedAt", Instant.now().minusSeconds(1).toString()));
-        return notificationLogRepository.save(notification);
-    }
-
-    private NotificationLog buildNotification(String transactionId, NotificationStatus status) {
         NotificationLog notification = new NotificationLog();
         notification.setEventId("evt-" + transactionId);
         notification.setTransactionId(transactionId);
-        notification.setNotificationStatus(status);
+        notification.setNotificationStatus(NotificationStatus.PROCESSING);
         notification.setTemplateVersionId(testTemplateVersionId);
         notification.setMetadata(Map.of(
                 "amount", "100.00",
                 "currency", "INR",
-                "paymentStatus", "SUCCESS",
-                "transactionId", transactionId));
-        return notification;
+                "transactionId", transactionId,
+                "processingStartedAt", Instant.now().minusSeconds(1).toString()));
+        return notificationLogRepository.save(notification);
     }
 }

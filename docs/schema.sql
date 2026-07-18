@@ -85,14 +85,18 @@ CREATE TABLE IF NOT EXISTS notification_log (
   id                   BIGINT       NOT NULL AUTO_INCREMENT,
   event_id             VARCHAR(100) NOT NULL,
   transaction_id       VARCHAR(100) NOT NULL,
-  notification_status  ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED') NOT NULL DEFAULT 'PENDING',
+  notification_status  ENUM('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'FAILED_PERMANENTLY') NOT NULL DEFAULT 'PENDING',
   template_version_id  BIGINT       NOT NULL,
   metadata             JSON         NULL,
+  retry_count          INT          NOT NULL DEFAULT 0,
+  last_attempt_at      DATETIME     NULL,
+  next_retry_at        DATETIME     NULL,
   created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   INDEX idx_transaction_id (transaction_id),
   INDEX idx_notification_status_created (notification_status, created_at),
+  INDEX idx_notification_status_next_retry (notification_status, next_retry_at),
   CONSTRAINT fk_notification_log_template_version
     FOREIGN KEY (template_version_id) REFERENCES notification_template_versions (id)
 );

@@ -6,6 +6,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties(NotificationDispatcherProperties.class)
+@EnableConfigurationProperties({
+    NotificationDispatcherProperties.class,
+    NotificationRetryProperties.class
+})
 public class NotificationDispatcherConfig {
 }

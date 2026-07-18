@@ -4,5 +4,6 @@ public enum NotificationStatus {
     PENDING,
     PROCESSING,
     SENT,
-    FAILED
+    FAILED,
+    FAILED_PERMANENTLY
 }
