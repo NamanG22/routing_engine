@@ -1,6 +1,6 @@
 # Routing Engine
 
-Kafka consumer service for the Event Routing Engine. Consumes payment-related events from a Kafka topic, persists them to MySQL, matches DB-driven notification rules (with optional conditions), dispatches outbound notifications from a `notification_log` work queue, and retries transient failures with configurable backoff.
+Kafka consumer service for the Event Routing Engine. Consumes payment-related events from Kafka topics (`events` and `order-events`), persists them to MySQL, matches DB-driven notification rules (with optional conditions), dispatches outbound notifications from a `notification_log` work queue, and retries transient failures with configurable backoff.
 
 Part of the Event Routing Engine system — pairs with the [upstream service](https://github.com/NamanG22/upstream_service) that publishes events via HTTP.
 
@@ -84,7 +84,8 @@ Settings are in `src/main/resources/application.properties`:
 | `server.port` | `9091` | HTTP port |
 | `spring.kafka.bootstrap-servers` | `localhost:9092` | Kafka broker |
 | `spring.kafka.consumer.group-id` | `routing-engine-group` | Consumer group |
-| `app.kafka.events-topic` | `events` | Topic to consume |
+| `app.kafka.events-topic` | `events` | Primary events topic to consume |
+| `app.kafka.order-events-topic` | `order-events` | Order events topic to consume (concurrent with primary) |
 | `DB_URL` | `jdbc:mysql://localhost:3306/routing_engine?serverTimezone=Asia/Kolkata` | MySQL JDBC URL |
 | `DB_USERNAME` | `routing_user` | Database user |
 | `DB_PASSWORD` | *(required)* | Database password |
@@ -120,7 +121,7 @@ Start Kafka and MySQL, then:
 ./mvnw spring-boot:run
 ```
 
-The service starts on `http://localhost:9091` and consumes from the `events` topic.
+The service starts on `http://localhost:9091` and consumes concurrently from the `events` and `order-events` topics.
 
 ## Event processing
 

@@ -40,7 +40,7 @@ public class EventConsumer {
 		try {
 			EventReceived event = objectMapper.readValue(record.value(), EventReceived.class);
 			log.info(
-					"Received event [topic={}, partition={}, offsetʼ={}, key={}]: {}",
+					"Received event [topic={}, partition={}, offset={}, key={}]: {}",
 					record.topic(),
 					record.partition(),
 					record.offset(),
