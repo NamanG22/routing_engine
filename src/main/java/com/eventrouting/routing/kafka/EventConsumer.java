@@ -26,10 +26,21 @@ public class EventConsumer {
 			topics = "${app.kafka.events-topic}",
 			groupId = "${spring.kafka.consumer.group-id}")
 	public void consume(ConsumerRecord<String, String> record) {
+		processRecord(record);
+	}
+
+	@KafkaListener(
+			topics = "${app.kafka.order-events-topic}",
+			groupId = "${spring.kafka.consumer.group-id}")
+	public void consumeOrderEvents(ConsumerRecord<String, String> record) {
+		processRecord(record);
+	}
+
+	private void processRecord(ConsumerRecord<String, String> record) {
 		try {
 			EventReceived event = objectMapper.readValue(record.value(), EventReceived.class);
 			log.info(
-					"Received event [topic={}, partition={}, offset={}, key={}]: {}",
+					"Received event [topic={}, partition={}, offsetʼ={}, key={}]: {}",
 					record.topic(),
 					record.partition(),
 					record.offset(),

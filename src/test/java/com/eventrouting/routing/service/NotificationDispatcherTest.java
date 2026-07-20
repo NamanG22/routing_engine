@@ -27,7 +27,7 @@ import com.eventrouting.routing.repository.NotificationTemplateRepository;
 import com.eventrouting.routing.repository.NotificationTemplateVersionRepository;
 
 @SpringBootTest
-@EmbeddedKafka(partitions = 1, topics = { "events" })
+@EmbeddedKafka(partitions = 1, topics = { "events", "order-events" })
 @TestPropertySource(properties = {
         "app.notification.dispatcher.enabled=true",
         "app.notification.retry.enabled=true",
